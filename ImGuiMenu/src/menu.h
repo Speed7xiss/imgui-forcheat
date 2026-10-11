@@ -12,6 +12,8 @@
 #include "imgui_internal.h"
 #include <cstdio>
 #include <cmath>
+#include <cstring>
+#include <cctype>
 
 namespace menu {
 
@@ -156,6 +158,9 @@ inline void ColorDot(RowCtx& c, float* col) {
 }
 
 inline bool Slider(RowCtx& c, float* v, float mn, float mx, const char* fmt, bool integer = false) {
+    if (!v || !std::isfinite(mn) || !std::isfinite(mx) || mn >= mx) return false;
+    if (!std::isfinite(*v)) *v = mn;
+    *v = ImClamp(*v, mn, mx);
     const float TW = 40.f, TRACK = 96.f, KR = 9.f;
     char buf[16]; snprintf(buf, sizeof buf, fmt, *v);
     ImVec2 ts = ImGui::CalcTextSize(buf), save = ImGui::GetCursorScreenPos();
@@ -184,6 +189,8 @@ inline bool Slider(RowCtx& c, float* v, float mn, float mx, const char* fmt, boo
 
 inline bool Segmented(RowCtx& c, const char* const* items, int n, int* sel) {
     const float H = 30.f, PX = 12.f;
+    if (!items || !sel || n <= 0 || n > 8) return false;
+    *sel = ImClamp(*sel, 0, n - 1);
     float w[8], total = 0.f;
     for (int i = 0; i < n; i++) { w[i] = ImGui::CalcTextSize(items[i]).x + PX * 2.f; total += w[i]; }
     ImVec2 p0(c.x - total - 4.f, c.cy - H * 0.5f), save = ImGui::GetCursorScreenPos();
@@ -210,6 +217,8 @@ inline bool Segmented(RowCtx& c, const char* const* items, int n, int* sel) {
 }
 
 inline bool Combo(RowCtx& c, const char* const* items, int n, int* sel, float W = 120.f) {
+    if (!items || !sel || n <= 0 || W <= 0.f) return false;
+    *sel = ImClamp(*sel, 0, n - 1);
     const float H = 28.f;
     ImVec2 p0(c.x - W, c.cy - H * 0.5f), p1(c.x, c.cy + H * 0.5f), save = ImGui::GetCursorScreenPos();
     ImGui::SetCursorScreenPos(p0);
@@ -245,6 +254,8 @@ inline bool Combo(RowCtx& c, const char* const* items, int n, int* sel, float W 
 }
 
 inline bool Stepper(RowCtx& c, int* v, int mn, int mx) {
+    if (!v || mn > mx) return false;
+    *v = ImClamp(*v, mn, mx);
     const float W = 26.f, H = 32.f;
     ImVec2 p0(c.x - W, c.cy - H * 0.5f), p1(c.x, c.cy + H * 0.5f), save = ImGui::GetCursorScreenPos();
     ImGui::SetCursorScreenPos(p0);
@@ -411,6 +422,18 @@ inline void AimPage(State& s) {
     ImGui::EndChild();
 }
 
+inline bool MatchesSearch(const char* label, const char* query) {
+    if (!query || !*query) return true;
+    if (!label) return false;
+    for (const char* p = label; *p; ++p) {
+        const char* a = p;
+        const char* b = query;
+        while (*a && *b && std::tolower(static_cast<unsigned char>(*a)) == std::tolower(static_cast<unsigned char>(*b))) { ++a; ++b; }
+        if (!*b) return true;
+    }
+    return false;
+}
+
 // ------------------------------------------------------------ style + entry
 inline void Style() {
     ImGuiStyle& st = ImGui::GetStyle();
@@ -431,7 +454,7 @@ inline void Style() {
 inline void Render(State& s, bool* open = nullptr) {
     const ImVec2 size(880.f, 560.f);
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -471,12 +494,15 @@ inline void Render(State& s, bool* open = nullptr) {
             { "Misc",    IM_COL32(255, 159, 10, 255) },
             { "Config",  IM_COL32(142, 142, 147, 255) },
         };
+        int visibleTabs = 0;
         for (int i = 0; i < 5; i++) {
-            ImGui::SetCursorPos(ImVec2(11.f, 61.f + i * 32.f));
+            if (!MatchesSearch(tabs[i].n, s.search)) continue;
+            ImGui::SetCursorPos(ImVec2(11.f, 61.f + visibleTabs++ * 32.f));
             ImU32 col = (i == 0 && s.tab == 0) ? IM_COL32(255, 255, 255, 40) : tabs[i].c;
             if (Tab(tabs[i].n, i, col, s.tab == i, 178.f)) s.tab = i;
         }
 
+        if (visibleTabs == 0) { ImGui::SetCursorPos(ImVec2(16.f, 68.f)); ImGui::TextDisabled("No results"); }
         cdl->AddCircleFilled(ImVec2(wp.x + 30.f, wp.y + size.y - 26.f), 4.5f, GREEN, 16);
         char fps[16]; snprintf(fps, sizeof fps, "%.0f FPS", io.Framerate);
         cdl->AddText(ImVec2(wp.x + 44.f, wp.y + size.y - 34.f), DIM, fps);
@@ -519,7 +545,9 @@ inline void Render(State& s, bool* open = nullptr) {
             }
         }
 
+        s.tab = ImClamp(s.tab, 0, 4);
         if (s.tab == 0) AimPage(s);
+        else { ImGui::SetCursorPos(ImVec2(25.f, 105.f)); ImGui::TextDisabled("This page is not available yet."); }
 
         // help button
         ImVec2 hc(cp.x + 25.f + 11.f, cp.y + size.y - 38.f);
