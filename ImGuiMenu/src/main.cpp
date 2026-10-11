@@ -147,10 +147,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
             done = true;
         }
 
+        // Reuse one timestamp for FPS sampling and frame pacing.
+        const auto now = Clock::now();
         // Count only successful, visible Presents rather than failed/occluded attempts.
         if (SUCCEEDED(hr) && !g_occluded) {
             ++fpsFrameCount;
-            const auto now = Clock::now();
             const double elapsed = std::chrono::duration<double>(now - fpsWindowStart).count();
             if (elapsed >= 0.5) {
                 state.render_fps = static_cast<float>(fpsFrameCount / elapsed);
