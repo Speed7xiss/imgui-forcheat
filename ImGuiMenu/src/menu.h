@@ -540,8 +540,8 @@ inline void SecondaryPage(State& s, float verticalOffset = 0.f) {
             ImGui::Dummy(ImVec2(1.f, 24.f));
             ImVec2 p = ImGui::GetCursorScreenPos();
             ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddCircle(p + ImVec2(137.f, 20.f), 13.f, IM_COL32(235, 235, 245, 120), 24, 1.8f);
-            dl->AddLine(p + ImVec2(146.f, 29.f), p + ImVec2(154.f, 37.f), IM_COL32(235, 235, 245, 120), 1.8f);
+            dl->AddCircle(ImVec2(p.x + 137.f, p.y + 20.f), 13.f, IM_COL32(235, 235, 245, 120), 24, 1.8f);
+            dl->AddLine(ImVec2(p.x + 146.f, p.y + 29.f), ImVec2(p.x + 154.f, p.y + 37.f), IM_COL32(235, 235, 245, 120), 1.8f);
             ImGui::Dummy(ImVec2(1.f, 46.f));
             const char* emptyTitle = "No player data";
             ImVec2 titleSize = ImGui::CalcTextSize(emptyTitle);
