@@ -6,6 +6,10 @@
 #include <d3d11.h>
 #include <tchar.h>
 #include <windowsx.h>
+#include <chrono>
+#include <thread>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -31,20 +35,32 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0, 0, hInst, nullptr, LoadCursor(nullptr, IDC_ARROW), nullptr, nullptr, L"ImGuiMenuWnd", nullptr };
     if (!RegisterClassExW(&wc)) return 1;
 
-    const int cw = 960, ch = 640;
-    RECT rc = { 0, 0, cw, ch };
-    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-    int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
-    int x = (GetSystemMetrics(SM_CXSCREEN) - ww) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - wh) / 2;
-    HWND hwnd = CreateWindowW(wc.lpszClassName, L"ImGui Menu", WS_POPUP | WS_THICKFRAME, x, y, ww, wh, nullptr, nullptr, hInst, nullptr);
+    // Full-screen host window; only the centered ImGui panel is painted.
+    const int cw = GetSystemMetrics(SM_CXSCREEN);
+    const int ch = GetSystemMetrics(SM_CYSCREEN);
+    HWND hwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        wc.lpszClassName, L"ImGui Overlay", WS_POPUP,
+        0, 0, cw, ch, nullptr, nullptr, hInst, nullptr);
 
-    if (!hwnd || !CreateDeviceD3D(hwnd)) {
-        CleanupDeviceD3D();
-        if (hwnd) DestroyWindow(hwnd);
+    if (!hwnd) {
         UnregisterClassW(wc.lpszClassName, hInst);
         return 1;
     }
-    ShowWindow(hwnd, SW_SHOWDEFAULT);
+    if (!CreateDeviceD3D(hwnd)) {
+        CleanupDeviceD3D();
+        DestroyWindow(hwnd);
+        UnregisterClassW(wc.lpszClassName, hInst);
+        return 1;
+    }
+    // Every pure-black pixel is transparent, including the area outside the panel.
+    if (!SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY)) {
+        CleanupDeviceD3D();
+        DestroyWindow(hwnd);
+        UnregisterClassW(wc.lpszClassName, hInst);
+        return 1;
+    }
+    ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
 
     IMGUI_CHECKVERSION();
@@ -72,7 +88,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     menu::Style();
     menu::State state;
     bool show = true;
-    const float clear[4] = { 0.04f, 0.04f, 0.07f, 1.f };
+    const float clear[4] = { 0.f, 0.f, 0.f, 0.f }; // black color-key background = transparent
+
+    using Clock = std::chrono::steady_clock;
+    auto fpsWindowStart = Clock::now();
+    auto nextFrame = fpsWindowStart;
+    unsigned long long fpsFrameCount = 0;
+    const auto frameInterval = std::chrono::duration_cast<Clock::duration>(
+        std::chrono::duration<double>(1.0 / 144.0)); // smooth UI without an unbounded busy loop
+    const MMRESULT timerResolution = timeBeginPeriod(1);
 
     bool done = false;
     while (!done) {
@@ -115,14 +139,32 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         g_ctx->ClearRenderTargetView(g_rtv, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-        HRESULT hr = g_swap->Present(1, 0);
+        // No VSync: don't pin the counter to the monitor's 75 Hz refresh rate.
+        HRESULT hr = g_swap->Present(0, 0);
         g_occluded = (hr == DXGI_STATUS_OCCLUDED);
         if (FAILED(hr) && !g_occluded) {
             OutputDebugStringW(L"DirectX Present failed.\n");
             done = true;
         }
+
+        ++fpsFrameCount;
+        const auto now = Clock::now();
+        const double elapsed = std::chrono::duration<double>(now - fpsWindowStart).count();
+        if (elapsed >= 0.5) {
+            state.render_fps = static_cast<float>(fpsFrameCount / elapsed);
+            fpsFrameCount = 0;
+            fpsWindowStart = now;
+        }
+
+        // Limit to 144 updates/s to keep animations smooth while avoiding a spin loop.
+        nextFrame += frameInterval;
+        if (nextFrame > now)
+            std::this_thread::sleep_until(nextFrame);
+        else
+            nextFrame = now;
     }
 
+    if (timerResolution == TIMERR_NOERROR) timeEndPeriod(1);
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -189,11 +231,17 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_resH = (UINT)HIWORD(lParam);
         return 0;
     case WM_NCHITTEST: {
-        const LRESULT hit = DefWindowProcW(hWnd, msg, wParam, lParam);
-        if (hit != HTCLIENT) return hit;
+        // Let mouse clicks pass through everywhere outside the visible panel.
         POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         ScreenToClient(hWnd, &p);
-        if (p.y >= 0 && p.y < 48 && p.x > 205 && p.x < 700) return HTCAPTION;
+        RECT client{};
+        GetClientRect(hWnd, &client);
+        constexpr int panelW = 880, panelH = 560;
+        const int panelLeft = (client.right - panelW) / 2;
+        const int panelTop = (client.bottom - panelH) / 2;
+        if (p.x < panelLeft || p.x >= panelLeft + panelW ||
+            p.y < panelTop - 20 || p.y >= panelTop + panelH + 20)
+            return HTTRANSPARENT;
         return HTCLIENT;
     }
     case WM_SYSCOMMAND:
