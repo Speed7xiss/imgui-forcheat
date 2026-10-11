@@ -20,6 +20,13 @@ namespace menu {
 // ------------------------------------------------------------ state
 struct State {
     int  tab = 0;
+    bool compact_mode = false;
+    bool show_fps = true;
+    bool keyboard_navigation = true;
+    float ui_scale = 1.0f;
+    int player_filter = 0;
+    char profile_name[48] = "Default";
+    bool show_help = false;
     char search[64] = {};
 
     // aimbot
@@ -434,6 +441,55 @@ inline bool MatchesSearch(const char* label, const char* query) {
     return false;
 }
 
+// ------------------------------------------------------------ independent demonstration pages
+inline void SecondaryPage(State& s) {
+    ImGui::SetCursorPos(ImVec2(25.f, 98.f));
+    ImGui::BeginChild("##secondary", ImVec2(-20.f, -78.f), false);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.f, 12.f));
+    if (s.tab == 1) {
+        ImGui::TextUnformatted("Appearance preview");
+        ImGui::Separator();
+        ImGui::Checkbox("Compact layout preference", &s.compact_mode);
+        ImGui::Checkbox("Show FPS indicator", &s.show_fps);
+        ImGui::TextDisabled("These options affect only this interface.");
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Color preview");
+        ImGui::ColorEdit3("Primary", s.box_col);
+        ImGui::ColorEdit3("Text", s.name_col);
+        ImGui::ColorEdit3("Secondary", s.skel_col);
+    } else if (s.tab == 2) {
+        ImGui::TextUnformatted("Player list");
+        ImGui::Separator();
+        ImGui::Combo("Filter", &s.player_filter, "All\0Online\0Offline\0\0");
+        ImGui::Spacing();
+        ImGui::TextDisabled("No player data source is connected.");
+        ImGui::TextWrapped("This application is an interface demonstration and does not collect information from games.");
+    } else if (s.tab == 3) {
+        ImGui::TextUnformatted("Interface options");
+        ImGui::Separator();
+        if (ImGui::Checkbox("Keyboard navigation", &s.keyboard_navigation))
+            ImGui::GetIO().ConfigFlags = s.keyboard_navigation ?
+                (ImGui::GetIO().ConfigFlags | ImGuiConfigFlags_NavEnableKeyboard) :
+                (ImGui::GetIO().ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard);
+        ImGui::Checkbox("Show FPS", &s.show_fps);
+        ImGui::Checkbox("Compact mode", &s.compact_mode);
+        ImGui::TextDisabled("Preferences are kept until the app closes.");
+    } else if (s.tab == 4) {
+        ImGui::TextUnformatted("Local profile");
+        ImGui::Separator();
+        ImGui::InputText("Profile name", s.profile_name, sizeof(s.profile_name));
+        if (ImGui::Button("Restore defaults")) {
+            s = State{};
+            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Save/load to disk is not implemented.");
+        ImGui::TextWrapped("Changes are stored in memory only. No save operation is simulated.");
+    }
+    ImGui::PopStyleVar();
+    ImGui::EndChild();
+}
+
 // ------------------------------------------------------------ style + entry
 inline void Style() {
     ImGuiStyle& st = ImGui::GetStyle();
@@ -454,8 +510,8 @@ inline void Style() {
 inline void Render(State& s, bool* open = nullptr) {
     const ImVec2 size(880.f, 560.f);
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(0.f, 0.f), ImGuiCond_Always);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
@@ -468,11 +524,12 @@ inline void Render(State& s, bool* open = nullptr) {
     ImGui::Begin("##menu", nullptr, wf);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 wp = ImGui::GetWindowPos();
-    DrawBackground(dl, wp, size);
+    const ImVec2 actualSize = ImGui::GetWindowSize();
+    DrawBackground(dl, wp, actualSize);
 
     // ---------------- sidebar
     ImGui::SetCursorPos(ImVec2(0, 0));
-    ImGui::BeginChild("##sb", ImVec2(200.f, size.y), 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+    ImGui::BeginChild("##sb", ImVec2(200.f, actualSize.y), 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
     {
         ImGui::SetCursorPos(ImVec2(11.f, 19.f));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(34.f, 6.5f));
@@ -503,7 +560,7 @@ inline void Render(State& s, bool* open = nullptr) {
         }
 
         if (visibleTabs == 0) { ImGui::SetCursorPos(ImVec2(16.f, 68.f)); ImGui::TextDisabled("No results"); }
-        cdl->AddCircleFilled(ImVec2(wp.x + 30.f, wp.y + size.y - 26.f), 4.5f, GREEN, 16);
+        if (s.show_fps) cdl->AddCircleFilled(ImVec2(wp.x + 30.f, wp.y + actualSize.y - 26.f), 4.5f, GREEN, 16);
         char fps[16]; snprintf(fps, sizeof fps, "%.0f FPS", io.Framerate);
         cdl->AddText(ImVec2(wp.x + 44.f, wp.y + size.y - 34.f), DIM, fps);
     }
@@ -511,7 +568,7 @@ inline void Render(State& s, bool* open = nullptr) {
 
     // ---------------- content
     ImGui::SetCursorPos(ImVec2(200.f, 0));
-    ImGui::BeginChild("##content", ImVec2(680.f, size.y), 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+    ImGui::BeginChild("##content", ImVec2(0.f, actualSize.y), 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
     {
         ImDrawList* cdl = ImGui::GetWindowDrawList();
         ImVec2 cp = ImGui::GetWindowPos();
@@ -526,8 +583,8 @@ inline void Render(State& s, bool* open = nullptr) {
 
         // window buttons
         struct WB { float x; ImU32 col; bool close; } wbs[] = {
-            { 838.f - 200.f, IM_COL32(255, 189, 46, 255), false },
-            { 858.f - 200.f, IM_COL32(255, 69, 58, 255), true },
+            { actualSize.x - 42.f - 200.f, IM_COL32(255, 189, 46, 255), false },
+            { actualSize.x - 22.f - 200.f, IM_COL32(255, 69, 58, 255), true },
         };
         for (auto& b : wbs) {
             ImVec2 ctr(cp.x + b.x, cp.y + 21.f);
@@ -541,19 +598,23 @@ inline void Render(State& s, bool* open = nullptr) {
                 cdl->AddLine(ImVec2(ctr.x + 3.f, ctr.y - 3.f), ImVec2(ctr.x - 3.f, ctr.y + 3.f), IM_COL32_WHITE, 1.8f);
                 if (hit && open) *open = false;
             } else {
+                if (hit) ShowWindow(GetActiveWindow(), SW_MINIMIZE);
                 cdl->AddLine(ImVec2(ctr.x - 3.5f, ctr.y), ImVec2(ctr.x + 3.5f, ctr.y), IM_COL32_WHITE, 1.8f);
             }
         }
 
         s.tab = ImClamp(s.tab, 0, 4);
         if (s.tab == 0) AimPage(s);
-        else { ImGui::SetCursorPos(ImVec2(25.f, 105.f)); ImGui::TextDisabled("This page is not available yet."); }
+        else SecondaryPage(s);
 
         // help button
-        ImVec2 hc(cp.x + 25.f + 11.f, cp.y + size.y - 38.f);
+        ImVec2 hc(cp.x + 25.f + 11.f, cp.y + actualSize.y - 38.f);
+        ImGui::SetCursorScreenPos(ImVec2(hc.x - 14.f, hc.y - 14.f));
+        if (ImGui::InvisibleButton("help_button", ImVec2(28.f, 28.f))) s.show_help = !s.show_help;
         cdl->AddCircleFilled(hc, 14.f, IM_COL32(120, 120, 128, 140), 24);
         ImVec2 ts = ImGui::CalcTextSize("?");
         cdl->AddText(ImVec2(hc.x - ts.x * 0.5f, hc.y - ts.y * 0.5f), COL_TEXT, "?");
+        if (s.show_help) { ImGui::SetCursorPos(ImVec2(25.f, actualSize.y - 105.f)); ImGui::TextWrapped("Demo UI: use the sidebar to navigate. Settings are local to this session."); }
     }
     ImGui::EndChild();
 
