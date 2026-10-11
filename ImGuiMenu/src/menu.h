@@ -33,6 +33,14 @@ struct State {
     bool include_offline_players = false;
     char search[64] = {};
 
+    // Movable panel position and drag origin (screen coordinates).
+    float panel_x = -1.f;
+    float panel_y = -1.f;
+    bool panel_dragging = false;
+    ImVec2 panel_drag_start_mouse = ImVec2(0.f, 0.f);
+    float panel_drag_start_x = 0.f;
+    float panel_drag_start_y = 0.f;
+
     // aimbot
     bool  aim_enabled = true, visible_only = true, team_check = false, draw_fov = true;
     float smoothing = 6.f, fov = 120.f;
@@ -673,13 +681,23 @@ inline void Render(State& s, bool* open = nullptr) {
     g_animationsEnabled = s.animations_enabled;
     g_rowHeight = s.compact_mode ? 32.f : ROW_H;
 
-    // Ease the panel into the center after the overlay starts.
+    // Preserve the user's panel position; initialize it to screen center once.
+    const float maxPanelX = ImMax(0.f, io.DisplaySize.x - size.x);
+    const float maxPanelY = ImMax(0.f, io.DisplaySize.y - size.y);
+    if (s.panel_x < 0.f || s.panel_y < 0.f) {
+        s.panel_x = maxPanelX * 0.5f;
+        s.panel_y = maxPanelY * 0.5f;
+    }
+    s.panel_x = ImClamp(s.panel_x, 0.f, maxPanelX);
+    s.panel_y = ImClamp(s.panel_y, 0.f, maxPanelY);
+
+    // Ease the panel into view without resetting its saved position.
     static float menuReveal = 0.f;
     if (!g_animationsEnabled) menuReveal = 1.f;
     else menuReveal = ImMin(1.f, menuReveal + io.DeltaTime * 6.f);
     const float revealEase = menuReveal * menuReveal * (3.f - 2.f * menuReveal);
-    const ImVec2 panelPos((io.DisplaySize.x - size.x) * 0.5f,
-                          (io.DisplaySize.y - size.y) * 0.5f + (1.f - revealEase) * 18.f);
+    const float revealOffset = (1.f - revealEase) * 18.f;
+    const ImVec2 panelPos(s.panel_x, s.panel_y + revealOffset);
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     ImGui::SetNextWindowPos(panelPos, ImGuiCond_Always);
 
@@ -696,6 +714,29 @@ inline void Render(State& s, bool* open = nullptr) {
     const ImVec2 wp = ImGui::GetWindowPos();
     const ImVec2 actualSize = ImGui::GetWindowSize();
     DrawBackground(dl, wp, actualSize);
+
+    // Drag the panel by its top header area, away from the window buttons.
+    const ImVec2 dragMin(wp.x + 205.f, wp.y + 4.f);
+    const ImVec2 dragMax(wp.x + actualSize.x - 70.f, wp.y + 49.f);
+    if (!s.panel_dragging && ImGui::IsMouseClicked(0) &&
+        ImGui::IsMouseHoveringRect(dragMin, dragMax, false) &&
+        !ImGui::IsAnyItemHovered()) {
+        s.panel_dragging = true;
+        s.panel_drag_start_mouse = io.MousePos;
+        s.panel_drag_start_x = s.panel_x;
+        s.panel_drag_start_y = s.panel_y;
+        ImGui::SetWindowFocus();
+    }
+    if (s.panel_dragging) {
+        if (ImGui::IsMouseDown(0)) {
+            s.panel_x = ImClamp(s.panel_drag_start_x + io.MousePos.x - s.panel_drag_start_mouse.x,
+                                0.f, maxPanelX);
+            s.panel_y = ImClamp(s.panel_drag_start_y + io.MousePos.y - s.panel_drag_start_mouse.y,
+                                0.f, maxPanelY);
+        } else {
+            s.panel_dragging = false;
+        }
+    }
 
     // ---------------- sidebar
     ImGui::SetCursorPos(ImVec2(0, 0));
