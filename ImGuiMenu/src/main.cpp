@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <d3d11.h>
 #include <tchar.h>
+#include <windowsx.h>
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -35,7 +36,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
     int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
     int x = (GetSystemMetrics(SM_CXSCREEN) - ww) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - wh) / 2;
-    HWND hwnd = CreateWindowW(wc.lpszClassName, L"ImGui Menu", WS_OVERLAPPEDWINDOW, x, y, ww, wh, nullptr, nullptr, hInst, nullptr);
+    HWND hwnd = CreateWindowW(wc.lpszClassName, L"ImGui Menu", WS_POPUP | WS_THICKFRAME, x, y, ww, wh, nullptr, nullptr, hInst, nullptr);
 
     if (!hwnd || !CreateDeviceD3D(hwnd)) {
         CleanupDeviceD3D();
@@ -50,6 +51,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
 
     const bool win32Ready = ImGui_ImplWin32_Init(hwnd);
@@ -102,6 +104,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         ImGui::NewFrame();
 
         if (show) menu::Render(state, &show);
+        if (state.request_minimize) { state.request_minimize = false; ShowWindow(hwnd, SW_MINIMIZE); }
         else PostQuitMessage(0);
 
         ImGui::Render();
@@ -182,6 +185,14 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_resW = (UINT)LOWORD(lParam);
         g_resH = (UINT)HIWORD(lParam);
         return 0;
+    case WM_NCHITTEST: {
+        const LRESULT hit = DefWindowProcW(hWnd, msg, wParam, lParam);
+        if (hit != HTCLIENT) return hit;
+        POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ScreenToClient(hWnd, &p);
+        if (p.y >= 0 && p.y < 48 && p.x > 205 && p.x < 700) return HTCAPTION;
+        return HTCLIENT;
+    }
     case WM_SYSCOMMAND:
         if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
         break;
