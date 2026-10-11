@@ -29,6 +29,8 @@ struct State {
     char profile_name[48] = "Default";
     bool show_help = false;
     bool request_minimize = false;
+    bool animations_enabled = true;
+    bool include_offline_players = false;
     char search[64] = {};
 
     // aimbot
@@ -57,6 +59,8 @@ static const ImU32 FILL   = IM_COL32(255, 255, 255, 22);
 static const ImU32 LINE   = IM_COL32(255, 255, 255, 38);
 static constexpr float ROW_H = 37.f;
 static constexpr float PAD   = 14.f;
+static bool g_animationsEnabled = true;
+static float g_rowHeight = ROW_H;
 
 // ------------------------------------------------------------ helpers
 inline ImU32 LerpCol(ImU32 a, ImU32 b, float t) {
@@ -67,9 +71,14 @@ inline ImU32 LerpCol(ImU32 a, ImU32 b, float t) {
 
 inline float Anim(ImGuiID id, bool target, float speed = 14.f) {
     ImGuiStorage* st = ImGui::GetStateStorage();
-    float v = st->GetFloat(id, target ? 1.f : 0.f);
+    const float desired = target ? 1.f : 0.f;
+    float v = st->GetFloat(id, desired);
+    if (!g_animationsEnabled) {
+        st->SetFloat(id, desired);
+        return desired;
+    }
     const float blend = 1.f - expf(-speed * ImMax(0.f, ImGui::GetIO().DeltaTime));
-    v += ((target ? 1.f : 0.f) - v) * blend;
+    v += (desired - v) * blend;
     st->SetFloat(id, v);
     return v;
 }
@@ -77,6 +86,10 @@ inline float Anim(ImGuiID id, bool target, float speed = 14.f) {
 inline float SmoothValue(ImGuiID id, float target, float speed = 22.f) {
     ImGuiStorage* st = ImGui::GetStateStorage();
     float value = st->GetFloat(id, target);
+    if (!g_animationsEnabled) {
+        st->SetFloat(id, target);
+        return target;
+    }
     const float blend = 1.f - expf(-speed * ImMax(0.f, ImGui::GetIO().DeltaTime));
     value += (target - value) * blend;
     st->SetFloat(id, value);
@@ -123,14 +136,14 @@ inline RowCtx Row(const char* label, bool first = false) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x;
     RowCtx c;
-    c.r  = ImRect(p, ImVec2(p.x + w, p.y + ROW_H));
+    c.r  = ImRect(p, ImVec2(p.x + w, p.y + g_rowHeight));
     c.x  = c.r.Max.x - PAD;
     c.dl = dl;
-    c.cy = p.y + ROW_H * 0.5f;
+    c.cy = p.y + g_rowHeight * 0.5f;
     if (!first) dl->AddLine(ImVec2(p.x, p.y), ImVec2(p.x + w, p.y), IM_COL32(255, 255, 255, 18));
     ImVec2 ts = ImGui::CalcTextSize(label);
     dl->AddText(ImVec2(p.x + PAD, c.cy - ts.y * 0.5f), COL_TEXT, label);
-    ImGui::Dummy(ImVec2(w, ROW_H));
+    ImGui::Dummy(ImVec2(w, g_rowHeight));
     return c;
 }
 
@@ -471,50 +484,155 @@ inline bool MatchesSearch(const char* label, const char* query) {
 // ------------------------------------------------------------ independent demonstration pages
 inline void SecondaryPage(State& s, float verticalOffset = 0.f) {
     ImGui::SetCursorPos(ImVec2(25.f, 98.f + verticalOffset));
-    ImGui::BeginChild("##secondary", ImVec2(-20.f, -78.f), false);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.f, 12.f));
+
+    static State savedProfile{};
+    static bool hasSavedProfile = false;
+    static const char* boxStyles[] = { "Corners", "Full", "Filled" };
+    static const char* playerFilters[] = { "All", "Online", "Offline" };
+
     if (s.tab == 1) {
-        ImGui::TextUnformatted("Appearance preview");
-        ImGui::Separator();
-        ImGui::Checkbox("Compact layout preference", &s.compact_mode);
-        ImGui::Checkbox("Show FPS indicator", &s.show_fps);
-        ImGui::TextDisabled("These options affect only this interface.");
-        ImGui::Spacing();
-        ImGui::TextUnformatted("Color preview");
-        ImGui::ColorEdit3("Primary", s.box_col);
-        ImGui::ColorEdit3("Text", s.name_col);
-        ImGui::ColorEdit3("Secondary", s.skel_col);
-    } else if (s.tab == 2) {
-        ImGui::TextUnformatted("Player list");
-        ImGui::Separator();
-        ImGui::Combo("Filter", &s.player_filter, "All\0Online\0Offline\0\0");
-        ImGui::Spacing();
-        ImGui::TextDisabled("No player data source is connected.");
-        ImGui::TextWrapped("This application is an interface demonstration and does not collect information from games.");
-    } else if (s.tab == 3) {
-        ImGui::TextUnformatted("Interface options");
-        ImGui::Separator();
-        if (ImGui::Checkbox("Keyboard navigation", &s.keyboard_navigation))
-            ImGui::GetIO().ConfigFlags = s.keyboard_navigation ?
-                (ImGui::GetIO().ConfigFlags | ImGuiConfigFlags_NavEnableKeyboard) :
-                (ImGui::GetIO().ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard);
-        ImGui::Checkbox("Show FPS", &s.show_fps);
-        ImGui::Checkbox("Compact mode", &s.compact_mode);
-        ImGui::TextDisabled("Preferences are kept until the app closes.");
-    } else if (s.tab == 4) {
-        ImGui::TextUnformatted("Local profile");
-        ImGui::Separator();
-        ImGui::InputText("Profile name", s.profile_name, sizeof(s.profile_name));
-        if (ImGui::Button("Restore defaults")) {
-            s = State{};
-            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        ImGui::BeginChild("##visualsLeft", ImVec2(306.f, -62.f), false,
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+        {
+            Card cd; BeginCard(cd, "ESP OVERLAY");
+            { auto r = Row("Enabled", true);    Switch(r, &s.esp_enabled); }
+            { auto r = Row("Bounding boxes");   Switch(r, &s.box); }
+            { auto r = Row("Player names");     Switch(r, &s.name); }
+            { auto r = Row("Health bars");      Switch(r, &s.health); }
+            { auto r = Row("Distance labels");  Switch(r, &s.distance); }
+            { auto r = Row("Skeleton preview"); Switch(r, &s.skeleton); }
+            { auto r = Row("Max distance");     Slider(r, &s.max_dist, 0.f, 2000.f, "%.0f", true); }
+            { auto r = Row("Box style");        Combo(r, boxStyles, 3, &s.box_style, 116.f); }
+            EndCard(cd, "Visual controls are stored locally in this UI.");
         }
-        ImGui::Spacing();
-        ImGui::TextDisabled("Save/load to disk is not implemented.");
-        ImGui::TextWrapped("Changes are stored in memory only. No save operation is simulated.");
+        ImGui::EndChild();
+        ImGui::SameLine(0.f, 17.f);
+        ImGui::BeginChild("##visualsRight", ImVec2(306.f, -62.f), false,
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+        {
+            Card cd; BeginCard(cd, "COLORS & DISPLAY");
+            { auto r = Row("Box color", true);      ColorDot(r, s.box_col); }
+            { auto r = Row("Name color");           ColorDot(r, s.name_col); }
+            { auto r = Row("Skeleton color");       ColorDot(r, s.skel_col); }
+            { auto r = Row("Overlay font size");    Stepper(r, &s.font_size, 8, 32); }
+            { auto r = Row("Compact UI density");   Switch(r, &s.compact_mode); }
+            EndCard(cd, "Click each color dot to open the picker.");
+        }
+        ImGui::EndChild();
+    } else if (s.tab == 2) {
+        ImGui::BeginChild("##playersLeft", ImVec2(306.f, -62.f), false,
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+        {
+            Card cd; BeginCard(cd, "PLAYER FILTERS");
+            { auto r = Row("List filter", true); Segmented(r, playerFilters, 3, &s.player_filter); }
+            { auto r = Row("Include offline");    Switch(r, &s.include_offline_players); }
+            ImGui::Dummy(ImVec2(1.f, 14.f));
+            ImGui::TextDisabled("Filters are ready for a player-data source.");
+            EndCard(cd, "No source is connected in this UI demo.");
+        }
+        ImGui::EndChild();
+        ImGui::SameLine(0.f, 17.f);
+        ImGui::BeginChild("##playersRight", ImVec2(306.f, -62.f), false,
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+        {
+            Card cd; BeginCard(cd, "PLAYER LIST");
+            ImGui::Dummy(ImVec2(1.f, 24.f));
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddCircle(p + ImVec2(137.f, 20.f), 13.f, IM_COL32(235, 235, 245, 120), 24, 1.8f);
+            dl->AddLine(p + ImVec2(146.f, 29.f), p + ImVec2(154.f, 37.f), IM_COL32(235, 235, 245, 120), 1.8f);
+            ImGui::Dummy(ImVec2(1.f, 46.f));
+            const char* emptyTitle = "No player data";
+            ImVec2 titleSize = ImGui::CalcTextSize(emptyTitle);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (274.f - titleSize.x) * 0.5f);
+            ImGui::TextUnformatted(emptyTitle);
+            ImGui::TextWrapped("This application does not read player or game data. The list will stay empty until a legitimate data source is added.");
+            EndCard(cd, "Nothing is being detected or simulated.");
+        }
+        ImGui::EndChild();
+    } else if (s.tab == 3) {
+        ImGui::BeginChild("##miscLeft", ImVec2(306.f, -62.f), false,
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+        {
+            Card cd; BeginCard(cd, "OVERLAY BEHAVIOR");
+            { auto r = Row("Show FPS badge", true); Switch(r, &s.show_fps); }
+            { auto r = Row("Compact layout");       Switch(r, &s.compact_mode); }
+            { auto r = Row("Smooth animations");    Switch(r, &s.animations_enabled); }
+            {
+                auto r = Row("Keyboard navigation");
+                if (Switch(r, &s.keyboard_navigation)) {
+                    ImGui::GetIO().ConfigFlags = s.keyboard_navigation
+                        ? (ImGui::GetIO().ConfigFlags | ImGuiConfigFlags_NavEnableKeyboard)
+                        : (ImGui::GetIO().ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard);
+                }
+            }
+            EndCard(cd, "Settings apply immediately to this interface.");
+        }
+        ImGui::EndChild();
+        ImGui::SameLine(0.f, 17.f);
+        ImGui::BeginChild("##miscRight", ImVec2(306.f, -62.f), false,
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+        {
+            Card cd; BeginCard(cd, "PERFORMANCE");
+            ImGui::TextUnformatted("Overlay frame rate");
+            ImGui::Text("%0.0f FPS", s.render_fps > 0.f ? s.render_fps : ImGui::GetIO().Framerate);
+            ImGui::Dummy(ImVec2(1.f, 12.f));
+            ImGui::TextWrapped("The counter measures this overlay's render loop. It is not a reading of an external game's FPS.");
+            ImGui::Dummy(ImVec2(1.f, 10.f));
+            EndCard(cd, "Frame pacing is capped at 144 updates/s.");
+        }
+        ImGui::EndChild();
+    } else if (s.tab == 4) {
+        ImGui::BeginChild("##configLeft", ImVec2(306.f, -62.f), false,
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+        {
+            Card cd; BeginCard(cd, "LOCAL PROFILE");
+            ImGui::TextUnformatted("Profile name");
+            ImGui::SetNextItemWidth(266.f);
+            ImGui::InputText("##profile_name", s.profile_name, sizeof(s.profile_name));
+            ImGui::Dummy(ImVec2(1.f, 8.f));
+            if (ImGui::Button("Save in memory", ImVec2(126.f, 30.f))) {
+                savedProfile = s;
+                hasSavedProfile = true;
+            }
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::BeginDisabled(!hasSavedProfile);
+            if (ImGui::Button("Load saved", ImVec2(126.f, 30.f))) {
+                s = savedProfile;
+                ImGui::GetIO().ConfigFlags = s.keyboard_navigation
+                    ? (ImGui::GetIO().ConfigFlags | ImGuiConfigFlags_NavEnableKeyboard)
+                    : (ImGui::GetIO().ConfigFlags & ~ImGuiConfigFlags_NavEnableKeyboard);
+            }
+            ImGui::EndDisabled();
+            ImGui::Dummy(ImVec2(1.f, 8.f));
+            if (ImGui::Button("Restore defaults", ImVec2(260.f, 30.f))) {
+                s = State{};
+                ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+            }
+            EndCard(cd, "Saved profiles are kept only until the app closes.");
+        }
+        ImGui::EndChild();
+        ImGui::SameLine(0.f, 17.f);
+        ImGui::BeginChild("##configRight", ImVec2(306.f, -62.f), false,
+            ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+        {
+            Card cd; BeginCard(cd, "PROFILE STATUS");
+            ImGui::TextUnformatted("Current profile");
+            ImGui::Text("%s", s.profile_name[0] ? s.profile_name : "Unnamed");
+            ImGui::Dummy(ImVec2(1.f, 12.f));
+            ImGui::TextUnformatted("Saved snapshot");
+            ImGui::TextColored(hasSavedProfile ? ImVec4(0.19f, 0.82f, 0.38f, 1.f)
+                                               : ImVec4(0.65f, 0.65f, 0.69f, 1.f),
+                               "%s", hasSavedProfile ? "Available in memory" : "No snapshot saved");
+            ImGui::Dummy(ImVec2(1.f, 12.f));
+            ImGui::TextWrapped("Profiles are not written to disk yet. Save in memory creates a session-only snapshot.");
+            EndCard(cd, "No fake disk save/load operation.");
+        }
+        ImGui::EndChild();
     }
+
     ImGui::PopStyleVar();
-    ImGui::EndChild();
 }
 
 // ------------------------------------------------------------ style + entry
@@ -537,10 +655,13 @@ inline void Style() {
 inline void Render(State& s, bool* open = nullptr) {
     const ImVec2 size(880.f, 560.f);
     ImGuiIO& io = ImGui::GetIO();
+    g_animationsEnabled = s.animations_enabled;
+    g_rowHeight = s.compact_mode ? 32.f : ROW_H;
 
     // Ease the panel into the center after the overlay starts.
     static float menuReveal = 0.f;
-    menuReveal = ImMin(1.f, menuReveal + io.DeltaTime * 6.f);
+    if (!g_animationsEnabled) menuReveal = 1.f;
+    else menuReveal = ImMin(1.f, menuReveal + io.DeltaTime * 6.f);
     const float revealEase = menuReveal * menuReveal * (3.f - 2.f * menuReveal);
     const ImVec2 panelPos((io.DisplaySize.x - size.x) * 0.5f,
                           (io.DisplaySize.y - size.y) * 0.5f + (1.f - revealEase) * 18.f);
@@ -601,7 +722,9 @@ inline void Render(State& s, bool* open = nullptr) {
         cdl->AddRectFilled(badgeMin, badgeMax, IM_COL32(255, 255, 255, 18), 9.f);
         cdl->AddRect(badgeMin, badgeMax, IM_COL32(255, 255, 255, 28), 9.f, 0, 1.f);
         if (s.show_fps) {
-            const float pulse = 0.72f + 0.28f * sinf(static_cast<float>(io.Time) * 3.2f);
+            const float pulse = g_animationsEnabled
+                ? 0.72f + 0.28f * sinf(static_cast<float>(io.Time) * 3.2f)
+                : 1.f;
             cdl->AddCircleFilled(ImVec2(wp.x + 29.f, wp.y + actualSize.y - 28.f),
                                  4.5f, IM_COL32(48, 209, 88, static_cast<int>(255.f * pulse)), 20);
             char fps[24];
@@ -619,7 +742,8 @@ inline void Render(State& s, bool* open = nullptr) {
         previousTab = s.tab;
         pageProgress = 0.f;
     }
-    pageProgress = ImMin(1.f, pageProgress + io.DeltaTime * 7.f);
+    if (!g_animationsEnabled) pageProgress = 1.f;
+    else pageProgress = ImMin(1.f, pageProgress + io.DeltaTime * 7.f);
     const float pageEase = pageProgress * pageProgress * (3.f - 2.f * pageProgress);
     const float pageOffset = (1.f - pageEase) * 12.f;
 
