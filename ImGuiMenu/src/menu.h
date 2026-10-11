@@ -427,44 +427,59 @@ inline void DrawBackground(ImDrawList* dl, ImVec2 p, ImVec2 s) {
 inline void AimPage(State& s, float verticalOffset = 0.f) {
     static const char* hitboxes[] = { "Head", "Neck", "Chest" };
     static const char* presets[]  = { "Legit", "Semi", "Custom" };
-    static const char* styles[]   = { "Corners", "Full", "Filled" };
 
     const float colw = 306.f;
     ImGui::SetCursorPos(ImVec2(25.f, 87.f + verticalOffset));
 
-    // ---- aimbot
-    ImGui::BeginChild("##col1", ImVec2(colw, 420.f), 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+    // ---- aim controls
+    ImGui::BeginChild("##col1", ImVec2(colw, 420.f), 0,
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
     {
-        Card cd; BeginCard(cd, "AIMBOT");
-        { auto r = Row("Enabled", true);   Switch(r, &s.aim_enabled); }
-        { auto r = Row("Visible only");    Switch(r, &s.visible_only); }
-        { auto r = Row("Team check");      Switch(r, &s.team_check); }
-        { auto r = Row("Smoothing");       Slider(r, &s.smoothing, 1.f, 10.f, "%.1f"); }
-        { auto r = Row("FOV");             Slider(r, &s.fov, 1.f, 360.f, "%.0f", true); }
-        { auto r = Row("Hitbox");          Segmented(r, hitboxes, 3, &s.hitbox); }
-        { auto r = Row("Aim key");         KeyBind(r, &s.aim_key); }
-        { auto r = Row("Draw FOV circle"); Switch(r, &s.draw_fov); }
-        { auto r = Row("Preset");          Combo(r, presets, 3, &s.preset); }
-        EndCard(cd, "Smoothing and FOV apply while the aim key is held.");
+        Card cd; BeginCard(cd, "AIM ASSIST");
+        { auto r = Row("Enabled", true); Switch(r, &s.aim_enabled); }
+        { auto r = Row("Smoothing");     Slider(r, &s.smoothing, 1.f, 10.f, "%.1f"); }
+        { auto r = Row("FOV");           Slider(r, &s.fov, 1.f, 360.f, "%.0f", true); }
+        { auto r = Row("Hitbox");        Segmented(r, hitboxes, 3, &s.hitbox); }
+        { auto r = Row("Aim key");       KeyBind(r, &s.aim_key); }
+        { auto r = Row("Preset");        Combo(r, presets, 3, &s.preset); }
+        EndCard(cd, "Controls shown here are UI settings only.");
     }
     ImGui::EndChild();
 
     ImGui::SameLine(0.f, 17.f);
 
-    // ---- esp
-    ImGui::BeginChild("##col2", ImVec2(colw, 420.f), 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
+    // ---- targeting options and a live visual preview
+    ImGui::BeginChild("##col2", ImVec2(colw, 420.f), 0,
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
     {
-        Card cd; BeginCard(cd, "ESP");
-        { auto r = Row("Enabled", true); Switch(r, &s.esp_enabled); }
-        { auto r = Row("Box");           Switch(r, &s.box);      ColorDot(r, s.box_col); }
-        { auto r = Row("Name");          Switch(r, &s.name);     ColorDot(r, s.name_col); }
-        { auto r = Row("Health bar");    Switch(r, &s.health); }
-        { auto r = Row("Distance");      Switch(r, &s.distance); }
-        { auto r = Row("Skeleton");      Switch(r, &s.skeleton); ColorDot(r, s.skel_col); }
-        { auto r = Row("Max distance");  Slider(r, &s.max_dist, 0.f, 2000.f, "%.0f", true); }
-        { auto r = Row("Box style");     Combo(r, styles, 3, &s.box_style); }
-        { auto r = Row("Font size");     Stepper(r, &s.font_size, 8, 32); }
-        EndCard(cd, "Colors apply to every enabled overlay.");
+        Card cd; BeginCard(cd, "TARGET FILTERS");
+        { auto r = Row("Visible only", true); Switch(r, &s.visible_only); }
+        { auto r = Row("Team check");         Switch(r, &s.team_check); }
+        { auto r = Row("Draw FOV circle");    Switch(r, &s.draw_fov); }
+        EndCard(cd, "No game data source is connected.");
+
+        ImGui::Dummy(ImVec2(1.f, 12.f));
+        const ImVec2 previewPos = ImGui::GetCursorScreenPos();
+        const ImVec2 previewSize(306.f, 136.f);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(previewPos, ImVec2(previewPos.x + previewSize.x, previewPos.y + previewSize.y), FILL, 12.f);
+        dl->AddRect(previewPos, ImVec2(previewPos.x + previewSize.x, previewPos.y + previewSize.y), LINE, 12.f);
+        ImGui::Dummy(previewSize);
+
+        const ImVec2 center(previewPos.x + 70.f, previewPos.y + 72.f);
+        const float radius = 18.f + 42.f * ImClamp(s.fov / 360.f, 0.f, 1.f);
+        if (s.draw_fov) {
+            dl->AddCircle(center, radius, ACCENT, 64, 1.7f);
+            dl->AddCircle(center, radius + 3.f, IM_COL32(10, 132, 255, 45), 64, 1.f);
+        }
+        dl->AddCircleFilled(center, 2.5f, COL_TEXT, 16);
+        dl->AddLine(ImVec2(center.x - 8.f, center.y), ImVec2(center.x + 8.f, center.y), COL_TEXT, 1.f);
+        dl->AddLine(ImVec2(center.x, center.y - 8.f), ImVec2(center.x, center.y + 8.f), COL_TEXT, 1.f);
+        dl->AddText(ImVec2(previewPos.x + 130.f, previewPos.y + 30.f), COL_TEXT, "FOV preview");
+        char fovText[32];
+        snprintf(fovText, sizeof fovText, "%.0f degrees", s.fov);
+        dl->AddText(ImVec2(previewPos.x + 130.f, previewPos.y + 54.f), DIM, fovText);
+        dl->AddText(ImVec2(previewPos.x + 130.f, previewPos.y + 80.f), DIM, "Visual only");
     }
     ImGui::EndChild();
 }
