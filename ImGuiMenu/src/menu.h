@@ -27,6 +27,7 @@ struct State {
     int player_filter = 0;
     char profile_name[48] = "Default";
     bool show_help = false;
+    bool request_minimize = false;
     char search[64] = {};
 
     // aimbot
@@ -598,7 +599,7 @@ inline void Render(State& s, bool* open = nullptr) {
                 cdl->AddLine(ImVec2(ctr.x + 3.f, ctr.y - 3.f), ImVec2(ctr.x - 3.f, ctr.y + 3.f), IM_COL32_WHITE, 1.8f);
                 if (hit && open) *open = false;
             } else {
-                if (hit) ShowWindow(GetActiveWindow(), SW_MINIMIZE);
+                if (hit) s.request_minimize = true;
                 cdl->AddLine(ImVec2(ctr.x - 3.5f, ctr.y), ImVec2(ctr.x + 3.5f, ctr.y), IM_COL32_WHITE, 1.8f);
             }
         }
