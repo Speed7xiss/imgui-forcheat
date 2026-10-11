@@ -104,8 +104,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         ImGui::NewFrame();
 
         if (show) menu::Render(state, &show);
-        if (state.request_minimize) { state.request_minimize = false; ShowWindow(hwnd, SW_MINIMIZE); }
-        else PostQuitMessage(0);
+        if (state.request_minimize) {
+            state.request_minimize = false;
+            ShowWindow(hwnd, SW_MINIMIZE);
+        }
+        if (!show) PostQuitMessage(0);
 
         ImGui::Render();
         g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
