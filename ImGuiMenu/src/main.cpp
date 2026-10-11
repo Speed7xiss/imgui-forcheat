@@ -26,6 +26,51 @@ static constexpr int           kPanelWidth = 880;
 static constexpr int           kPanelHeight = 560;
 static constexpr int           kOverlayToggleHotkeyId = 0xB417;
 static int                     g_panelX = 0, g_panelY = 0;
+static HWND                    g_glassHwnd = nullptr;
+static bool                    g_glassAcrylic = false;
+
+// SetWindowCompositionAttribute is dynamically resolved because it is not part of
+// the stable public Win32 SDK surface on every toolchain.
+enum AccentStateCustom {
+    ACCENT_DISABLED_CUSTOM = 0,
+    ACCENT_ENABLE_ACRYLICBLURBEHIND_CUSTOM = 4
+};
+enum WindowCompositionAttributeCustom {
+    WCA_ACCENT_POLICY_CUSTOM = 19
+};
+struct AccentPolicyCustom {
+    int AccentState;
+    int AccentFlags;
+    DWORD GradientColor; // AABBGGRR, including tint opacity in AA
+    int AnimationId;
+};
+struct WindowCompositionAttributeDataCustom {
+    int Attribute;
+    PVOID Data;
+    SIZE_T SizeOfData;
+};
+using SetWindowCompositionAttributeProc =
+    BOOL(WINAPI*)(HWND, WindowCompositionAttributeDataCustom*);
+
+static bool EnableAcrylicBackdrop(HWND hwnd)
+{
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    auto setWindowCompositionAttribute = user32
+        ? reinterpret_cast<SetWindowCompositionAttributeProc>(
+            GetProcAddress(user32, "SetWindowCompositionAttribute"))
+        : nullptr;
+    if (!setWindowCompositionAttribute) return false;
+
+    AccentPolicyCustom policy{};
+    policy.AccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND_CUSTOM;
+    policy.AccentFlags = 2;
+    policy.GradientColor = 0xAA191B29; // dark, softly tinted glass
+    WindowCompositionAttributeDataCustom data{};
+    data.Attribute = WCA_ACCENT_POLICY_CUSTOM;
+    data.Data = &policy;
+    data.SizeOfData = sizeof(policy);
+    return setWindowCompositionAttribute(hwnd, &data) != FALSE;
+}
 
 static bool CreateDeviceD3D(HWND hWnd);
 static void CleanupDeviceD3D();
@@ -66,6 +111,33 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         UnregisterClassW(wc.lpszClassName, hInst);
         return 1;
     }
+    // Separate backdrop window: DWM acrylic blurs the desktop behind the panel,
+    // while the DirectX color-key window keeps the rest of the screen transparent.
+    g_glassHwnd = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+        wc.lpszClassName, L"ImGui Glass Backdrop", WS_POPUP,
+        g_panelX, g_panelY, kPanelWidth, kPanelHeight,
+        nullptr, nullptr, hInst, nullptr);
+    if (g_glassHwnd) {
+        HRGN roundedRegion = CreateRoundRectRgn(0, 0, kPanelWidth + 1, kPanelHeight + 1, 28, 28);
+        if (roundedRegion && !SetWindowRgn(g_glassHwnd, roundedRegion, TRUE))
+            DeleteObject(roundedRegion);
+
+        g_glassAcrylic = EnableAcrylicBackdrop(g_glassHwnd);
+        if (!g_glassAcrylic) {
+            // Compatibility fallback for Windows builds where acrylic is unavailable.
+            LONG_PTR exStyle = GetWindowLongPtrW(g_glassHwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(g_glassHwnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+            SetLayeredWindowAttributes(g_glassHwnd, 0, 224, LWA_ALPHA);
+            OutputDebugStringW(L"Acrylic backdrop unavailable; using translucent fallback.\n");
+        }
+        ShowWindow(g_glassHwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(g_glassHwnd, hwnd, g_panelX, g_panelY, kPanelWidth, kPanelHeight,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    } else {
+        OutputDebugStringW(L"Glass backdrop window could not be created.\n");
+    }
+
     // Register a global Insert hotkey so the overlay can be reopened while hidden.
     const bool insertHotkeyRegistered =
         RegisterHotKey(hwnd, kOverlayToggleHotkeyId, MOD_NOREPEAT, VK_INSERT) != FALSE;
@@ -73,6 +145,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         OutputDebugStringW(L"RegisterHotKey(INSERT) failed; using key-state fallback.\n");
 
     ShowWindow(hwnd, SW_SHOW);
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, cw, ch,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE);
     UpdateWindow(hwnd);
 
     IMGUI_CHECKVERSION();
@@ -87,6 +161,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     if (!dx11Ready) {
         if (win32Ready) ImGui_ImplWin32_Shutdown();
         if (insertHotkeyRegistered) UnregisterHotKey(hwnd, kOverlayToggleHotkeyId);
+        if (g_glassHwnd) { DestroyWindow(g_glassHwnd); g_glassHwnd = nullptr; }
         ImGui::DestroyContext();
         CleanupDeviceD3D();
         DestroyWindow(hwnd);
@@ -107,12 +182,19 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     auto toggleOverlay = [&]() {
         show = !show;
         if (show) {
+            if (g_glassHwnd) {
+                ShowWindow(g_glassHwnd, SW_SHOWNOACTIVATE);
+                SetWindowPos(g_glassHwnd, hwnd, g_panelX, g_panelY,
+                             kPanelWidth, kPanelHeight, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
             ShowWindow(hwnd, SW_SHOW);
-            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, cw, ch, SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE);
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, cw, ch,
+                         SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             SetForegroundWindow(hwnd);
             SetFocus(hwnd);
         } else {
             ShowWindow(hwnd, SW_HIDE);
+            if (g_glassHwnd) ShowWindow(g_glassHwnd, SW_HIDE);
         }
     };
     bool insertWasDown = false;
@@ -149,6 +231,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         // Stay alive while hidden so the global Insert hotkey can reopen the overlay.
         if (!show) {
             if (IsWindowVisible(hwnd)) ShowWindow(hwnd, SW_HIDE);
+            if (g_glassHwnd && IsWindowVisible(g_glassHwnd)) ShowWindow(g_glassHwnd, SW_HIDE);
             Sleep(10);
             continue;
         }
@@ -174,8 +257,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
 
         if (show) {
             menu::Render(state, &show);
-            g_panelX = static_cast<int>(state.panel_x);
-            g_panelY = static_cast<int>(state.panel_y);
+            const int movedX = static_cast<int>(state.panel_x);
+            const int movedY = static_cast<int>(state.panel_y);
+            if (movedX != g_panelX || movedY != g_panelY) {
+                g_panelX = movedX;
+                g_panelY = movedY;
+                if (g_glassHwnd && IsWindowVisible(g_glassHwnd))
+                    SetWindowPos(g_glassHwnd, hwnd, g_panelX, g_panelY,
+                                 kPanelWidth, kPanelHeight, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
         }
         if (state.request_minimize) {
             state.request_minimize = false;
@@ -221,6 +311,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
 
     if (timerResolution == TIMERR_NOERROR) timeEndPeriod(1);
     if (insertHotkeyRegistered) UnregisterHotKey(hwnd, kOverlayToggleHotkeyId);
+    if (g_glassHwnd) { DestroyWindow(g_glassHwnd); g_glassHwnd = nullptr; }
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -279,7 +370,26 @@ static void CleanupRenderTarget()
 
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
+    if (hWnd == g_glassHwnd) {
+        switch (msg) {
+        case WM_NCHITTEST: return HTTRANSPARENT;
+        case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+        case WM_ERASEBKGND:
+            if (!g_glassAcrylic) {
+                RECT rc{};
+                GetClientRect(hWnd, &rc);
+                HBRUSH brush = CreateSolidBrush(RGB(25, 27, 41));
+                if (brush) {
+                    FillRect(reinterpret_cast<HDC>(wParam), &rc, brush);
+                    DeleteObject(brush);
+                }
+            }
+            return 1;
+        }
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
+    if (ImGui::GetCurrentContext() != nullptr &&
+        ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
     switch (msg) {
     case WM_SIZE:
         if (wParam == SIZE_MINIMIZED) return 0;
