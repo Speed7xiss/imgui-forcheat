@@ -22,6 +22,10 @@ static IDXGISwapChain*         g_swap = nullptr;
 static ID3D11RenderTargetView* g_rtv  = nullptr;
 static bool                    g_occluded = false;
 static UINT                    g_resW = 0, g_resH = 0;
+static constexpr int           kPanelWidth = 880;
+static constexpr int           kPanelHeight = 560;
+static constexpr int           kOverlayToggleHotkeyId = 0xB417;
+static int                     g_panelX = 0, g_panelY = 0;
 
 static bool CreateDeviceD3D(HWND hWnd);
 static void CleanupDeviceD3D();
@@ -38,6 +42,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     // Full-screen host window; only the centered ImGui panel is painted.
     const int cw = GetSystemMetrics(SM_CXSCREEN);
     const int ch = GetSystemMetrics(SM_CYSCREEN);
+    g_panelX = cw > kPanelWidth ? (cw - kPanelWidth) / 2 : 0;
+    g_panelY = ch > kPanelHeight ? (ch - kPanelHeight) / 2 : 0;
     HWND hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         wc.lpszClassName, L"ImGui Overlay", WS_POPUP,
@@ -60,6 +66,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         UnregisterClassW(wc.lpszClassName, hInst);
         return 1;
     }
+    // Register a global Insert hotkey so the overlay can be reopened while hidden.
+    const bool insertHotkeyRegistered =
+        RegisterHotKey(hwnd, kOverlayToggleHotkeyId, MOD_NOREPEAT, VK_INSERT) != FALSE;
+    if (!insertHotkeyRegistered)
+        OutputDebugStringW(L"RegisterHotKey(INSERT) failed; using key-state fallback.\n");
+
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
 
@@ -74,6 +86,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     const bool dx11Ready = win32Ready && ImGui_ImplDX11_Init(g_dev, g_ctx);
     if (!dx11Ready) {
         if (win32Ready) ImGui_ImplWin32_Shutdown();
+        if (insertHotkeyRegistered) UnregisterHotKey(hwnd, kOverlayToggleHotkeyId);
         ImGui::DestroyContext();
         CleanupDeviceD3D();
         DestroyWindow(hwnd);
@@ -87,7 +100,22 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
 
     menu::Style();
     menu::State state;
+    state.panel_x = static_cast<float>(g_panelX);
+    state.panel_y = static_cast<float>(g_panelY);
     bool show = true;
+
+    auto toggleOverlay = [&]() {
+        show = !show;
+        if (show) {
+            ShowWindow(hwnd, SW_SHOW);
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, cw, ch, SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE);
+            SetForegroundWindow(hwnd);
+            SetFocus(hwnd);
+        } else {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+    };
+    bool insertWasDown = false;
     const float clear[4] = { 0.f, 0.f, 0.f, 0.f }; // black color-key background = transparent
 
     using Clock = std::chrono::steady_clock;
@@ -100,13 +128,30 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
 
     bool done = false;
     while (!done) {
+        if (!insertHotkeyRegistered) {
+            const bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
+            if (insertDown && !insertWasDown) toggleOverlay();
+            insertWasDown = insertDown;
+        }
+
         MSG msg;
         while (PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
+            if (insertHotkeyRegistered && msg.message == WM_HOTKEY &&
+                msg.wParam == static_cast<WPARAM>(kOverlayToggleHotkeyId)) {
+                toggleOverlay();
+            }
             if (msg.message == WM_QUIT) done = true;
         }
         if (done) break;
+
+        // Stay alive while hidden so the global Insert hotkey can reopen the overlay.
+        if (!show) {
+            if (IsWindowVisible(hwnd)) ShowWindow(hwnd, SW_HIDE);
+            Sleep(10);
+            continue;
+        }
 
         if (IsIconic(hwnd)) { Sleep(50); continue; }
         if (g_occluded && g_swap->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) { Sleep(50); continue; }
@@ -127,12 +172,18 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (show) menu::Render(state, &show);
+        if (show) {
+            menu::Render(state, &show);
+            g_panelX = static_cast<int>(state.panel_x);
+            g_panelY = static_cast<int>(state.panel_y);
+        }
         if (state.request_minimize) {
             state.request_minimize = false;
-            ShowWindow(hwnd, SW_MINIMIZE);
+            show = false;
+            ShowWindow(hwnd, SW_HIDE);
         }
-        if (!show) PostQuitMessage(0);
+        // The close button hides the menu; Insert always brings it back.
+        if (!show) ShowWindow(hwnd, SW_HIDE);
 
         ImGui::Render();
         g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
@@ -169,6 +220,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     }
 
     if (timerResolution == TIMERR_NOERROR) timeEndPeriod(1);
+    if (insertHotkeyRegistered) UnregisterHotKey(hwnd, kOverlayToggleHotkeyId);
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -241,10 +293,10 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         RECT client{};
         GetClientRect(hWnd, &client);
         constexpr int panelW = 880, panelH = 560;
-        const int panelLeft = (client.right - panelW) / 2;
-        const int panelTop = (client.bottom - panelH) / 2;
+        const int panelLeft = g_panelX;
+        const int panelTop = g_panelY;
         if (p.x < panelLeft || p.x >= panelLeft + panelW ||
-            p.y < panelTop - 20 || p.y >= panelTop + panelH + 20)
+            p.y < panelTop || p.y >= panelTop + panelH)
             return HTTRANSPARENT;
         return HTCLIENT;
     }
