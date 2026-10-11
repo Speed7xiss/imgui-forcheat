@@ -20,7 +20,7 @@ static UINT                    g_resW = 0, g_resH = 0;
 
 static bool CreateDeviceD3D(HWND hWnd);
 static void CleanupDeviceD3D();
-static void CreateRenderTarget();
+static bool CreateRenderTarget();
 static void CleanupRenderTarget();
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 static LRESULT WINAPI WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -28,7 +28,7 @@ static LRESULT WINAPI WndProc(HWND, UINT, WPARAM, LPARAM);
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
 {
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0, 0, hInst, nullptr, LoadCursor(nullptr, IDC_ARROW), nullptr, nullptr, L"ImGuiMenuWnd", nullptr };
-    RegisterClassExW(&wc);
+    if (!RegisterClassExW(&wc)) return 1;
 
     const int cw = 960, ch = 640;
     RECT rc = { 0, 0, cw, ch };
@@ -37,8 +37,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     int x = (GetSystemMetrics(SM_CXSCREEN) - ww) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - wh) / 2;
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"ImGui Menu", WS_OVERLAPPEDWINDOW, x, y, ww, wh, nullptr, nullptr, hInst, nullptr);
 
-    if (!CreateDeviceD3D(hwnd)) {
+    if (!hwnd || !CreateDeviceD3D(hwnd)) {
         CleanupDeviceD3D();
+        if (hwnd) DestroyWindow(hwnd);
         UnregisterClassW(wc.lpszClassName, hInst);
         return 1;
     }
@@ -51,8 +52,16 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     io.IniFilename = nullptr;
     ImGui::StyleColorsDark();
 
-    ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplDX11_Init(g_dev, g_ctx);
+    const bool win32Ready = ImGui_ImplWin32_Init(hwnd);
+    const bool dx11Ready = win32Ready && ImGui_ImplDX11_Init(g_dev, g_ctx);
+    if (!dx11Ready) {
+        if (win32Ready) ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+        CleanupDeviceD3D();
+        DestroyWindow(hwnd);
+        UnregisterClassW(wc.lpszClassName, hInst);
+        return 1;
+    }
 
     // Segoe UI ships with Windows; falls back to the built-in font if missing.
     if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 15.0f))
@@ -73,14 +82,19 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
         }
         if (done) break;
 
-        if (g_occluded && g_swap->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) { Sleep(10); continue; }
+        if (IsIconic(hwnd)) { Sleep(50); continue; }
+        if (g_occluded && g_swap->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED) { Sleep(50); continue; }
         g_occluded = false;
 
         if (g_resW != 0 && g_resH != 0) {
             CleanupRenderTarget();
-            g_swap->ResizeBuffers(0, g_resW, g_resH, DXGI_FORMAT_UNKNOWN, 0);
+            const HRESULT resizeHr = g_swap->ResizeBuffers(0, g_resW, g_resH, DXGI_FORMAT_UNKNOWN, 0);
             g_resW = g_resH = 0;
-            CreateRenderTarget();
+            if (FAILED(resizeHr) || !CreateRenderTarget()) {
+                OutputDebugStringW(L"DirectX resize/render target failure.\n");
+                done = true;
+                break;
+            }
         }
 
         ImGui_ImplDX11_NewFrame();
@@ -97,6 +111,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
 
         HRESULT hr = g_swap->Present(1, 0);
         g_occluded = (hr == DXGI_STATUS_OCCLUDED);
+        if (FAILED(hr) && !g_occluded) {
+            OutputDebugStringW(L"DirectX Present failed.\n");
+            done = true;
+        }
     }
 
     ImGui_ImplDX11_Shutdown();
@@ -127,9 +145,8 @@ static bool CreateDeviceD3D(HWND hWnd)
     HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, fls, 2, D3D11_SDK_VERSION, &sd, &g_swap, &g_dev, &fl, &g_ctx);
     if (hr == DXGI_ERROR_UNSUPPORTED)
         hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, fls, 2, D3D11_SDK_VERSION, &sd, &g_swap, &g_dev, &fl, &g_ctx);
-    if (hr != S_OK) return false;
-    CreateRenderTarget();
-    return true;
+    if (FAILED(hr)) return false;
+    return CreateRenderTarget();
 }
 
 static void CleanupDeviceD3D()
@@ -140,12 +157,15 @@ static void CleanupDeviceD3D()
     if (g_dev)  { g_dev->Release();  g_dev  = nullptr; }
 }
 
-static void CreateRenderTarget()
+static bool CreateRenderTarget()
 {
+    if (!g_swap || !g_dev) return false;
     ID3D11Texture2D* bb = nullptr;
-    g_swap->GetBuffer(0, IID_PPV_ARGS(&bb));
-    g_dev->CreateRenderTargetView(bb, nullptr, &g_rtv);
+    const HRESULT getHr = g_swap->GetBuffer(0, IID_PPV_ARGS(&bb));
+    if (FAILED(getHr) || !bb) return false;
+    const HRESULT viewHr = g_dev->CreateRenderTargetView(bb, nullptr, &g_rtv);
     bb->Release();
+    return SUCCEEDED(viewHr) && g_rtv != nullptr;
 }
 
 static void CleanupRenderTarget()
