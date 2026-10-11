@@ -290,13 +290,10 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         // Let mouse clicks pass through everywhere outside the visible panel.
         POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         ScreenToClient(hWnd, &p);
-        RECT client{};
-        GetClientRect(hWnd, &client);
-        constexpr int panelW = 880, panelH = 560;
         const int panelLeft = g_panelX;
         const int panelTop = g_panelY;
-        if (p.x < panelLeft || p.x >= panelLeft + panelW ||
-            p.y < panelTop || p.y >= panelTop + panelH)
+        if (p.x < panelLeft || p.x >= panelLeft + kPanelWidth ||
+            p.y < panelTop || p.y >= panelTop + kPanelHeight)
             return HTTRANSPARENT;
         return HTCLIENT;
     }
