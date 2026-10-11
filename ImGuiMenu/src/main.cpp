@@ -64,7 +64,7 @@ static bool EnableAcrylicBackdrop(HWND hwnd)
     AccentPolicyCustom policy{};
     policy.AccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND_CUSTOM;
     policy.AccentFlags = 2;
-    policy.GradientColor = 0xAA191B29; // dark, softly tinted glass
+    policy.GradientColor = 0xAA191B29; // ARGB: dark, softly tinted glass
     WindowCompositionAttributeDataCustom data{};
     data.Attribute = WCA_ACCENT_POLICY_CUSTOM;
     data.Data = &policy;
