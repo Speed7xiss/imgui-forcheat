@@ -128,9 +128,13 @@ inline void BeginCard(Card& c, const char* title) {
 inline void EndCard(Card& c, const char* footnote = nullptr) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p1(c.p0.x + c.w, ImGui::GetCursorScreenPos().y);
+    // Keep the acrylic desktop material visible through the cards.
+    // Borders define each section without painting an opaque rectangle over the glass.
     c.sp.SetCurrentChannel(dl, 0);
-    dl->AddRectFilled(c.p0, p1, FILL, 12.f);
-    dl->AddRect(c.p0, p1, LINE, 12.f);
+    dl->AddRect(c.p0, p1, IM_COL32(235, 240, 255, 46), 12.f, 0, 1.f);
+    dl->AddLine(ImVec2(c.p0.x + 14.f, c.p0.y + 1.f),
+                ImVec2(c.p0.x + c.w - 14.f, c.p0.y + 1.f),
+                IM_COL32(255, 255, 255, 24), 1.f);
     c.sp.Merge(dl);
     if (footnote) {
         ImVec2 p = ImGui::GetCursorScreenPos();
@@ -417,18 +421,21 @@ inline bool Tab(const char* label, int icon, ImU32 col, bool sel, float w) {
 }
 
 inline void DrawBackground(ImDrawList* dl, ImVec2 p, ImVec2 s) {
+    // The separate DWM acrylic window paints the blurred glass behind this UI.
+    // Leave the panel interior untouched so the desktop material can show through.
     ImVec2 q(p.x + s.x, p.y + s.y);
-    int v0 = dl->VtxBuffer.Size;
-    dl->AddRectFilled(p, q, IM_COL32_WHITE, 14.f);
-    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, p, q,
-                                                  IM_COL32(60, 52, 140, 255), IM_COL32(18, 66, 130, 255));
-    const ImU32 k0 = IM_COL32(8, 8, 16, 0), k1 = IM_COL32(8, 8, 16, 235);
-    float mid = p.y + s.y * 0.5f;
-    dl->AddRectFilledMultiColor(ImVec2(p.x, p.y + 20.f), ImVec2(q.x, mid), k0, k0, k1, k1);
-    dl->AddRectFilledMultiColor(ImVec2(p.x, mid), ImVec2(q.x, q.y - 20.f), k1, k1, k0, k0);
-    dl->AddRectFilled(p, ImVec2(p.x + 200.f, q.y), IM_COL32(255, 255, 255, 12), 14.f, ImDrawFlags_RoundCornersLeft);
-    dl->AddLine(ImVec2(p.x + 200.f, p.y + 1.f), ImVec2(p.x + 200.f, q.y - 1.f), IM_COL32(255, 255, 255, 30));
-    dl->AddRect(p, q, IM_COL32(255, 255, 255, 45), 14.f);
+    dl->AddRect(p, q, IM_COL32(238, 242, 255, 78), 14.f, 0, 1.15f);
+    dl->AddRect(ImVec2(p.x + 1.f, p.y + 1.f),
+                ImVec2(q.x - 1.f, q.y - 1.f),
+                IM_COL32(255, 255, 255, 22), 13.f, 0, 1.f);
+
+    // Clean glass separation for the navigation rail, plus a restrained top highlight.
+    dl->AddLine(ImVec2(p.x + 200.f, p.y + 14.f),
+                ImVec2(p.x + 200.f, q.y - 14.f),
+                IM_COL32(238, 242, 255, 48), 1.f);
+    dl->AddLine(ImVec2(p.x + 28.f, p.y + 1.5f),
+                ImVec2(q.x - 28.f, p.y + 1.5f),
+                IM_COL32(150, 190, 255, 90), 1.f);
 }
 
 // ------------------------------------------------------------ pages
