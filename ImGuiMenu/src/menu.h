@@ -738,7 +738,7 @@ inline void Render(State& s, bool* open = nullptr) {
         cdl->AddRect(badgeMin, badgeMax, IM_COL32(255, 255, 255, 28), 9.f, 0, 1.f);
         if (s.show_fps) {
             const float pulse = g_animationsEnabled
-                ? 0.72f + 0.28f * sinf(static_cast<float>(io.Time) * 3.2f)
+                ? 0.72f + 0.28f * sinf(static_cast<float>(ImGui::GetTime()) * 3.2f)
                 : 1.f;
             cdl->AddCircleFilled(ImVec2(wp.x + 29.f, wp.y + actualSize.y - 28.f),
                                  4.5f, IM_COL32(48, 209, 88, static_cast<int>(255.f * pulse)), 20);
