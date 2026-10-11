@@ -22,6 +22,7 @@ struct State {
     int  tab = 0;
     bool compact_mode = false;
     bool show_fps = true;
+    float render_fps = 0.0f; // measured by the host render loop
     bool keyboard_navigation = true;
     float ui_scale = 1.0f;
     int player_filter = 0;
@@ -67,9 +68,19 @@ inline ImU32 LerpCol(ImU32 a, ImU32 b, float t) {
 inline float Anim(ImGuiID id, bool target, float speed = 14.f) {
     ImGuiStorage* st = ImGui::GetStateStorage();
     float v = st->GetFloat(id, target ? 1.f : 0.f);
-    v += ((target ? 1.f : 0.f) - v) * ImMin(1.f, ImGui::GetIO().DeltaTime * speed);
+    const float blend = 1.f - expf(-speed * ImMax(0.f, ImGui::GetIO().DeltaTime));
+    v += ((target ? 1.f : 0.f) - v) * blend;
     st->SetFloat(id, v);
     return v;
+}
+
+inline float SmoothValue(ImGuiID id, float target, float speed = 22.f) {
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    float value = st->GetFloat(id, target);
+    const float blend = 1.f - expf(-speed * ImMax(0.f, ImGui::GetIO().DeltaTime));
+    value += (target - value) * blend;
+    st->SetFloat(id, value);
+    return value;
 }
 
 inline void Chevron(ImDrawList* dl, ImVec2 c, bool up, ImU32 col) {
@@ -177,6 +188,7 @@ inline bool Slider(RowCtx& c, float* v, float mn, float mx, const char* fmt, boo
     ImGui::SetCursorScreenPos(ImVec2(tx0 - KR, c.cy - KR - 2.f));
     ImGui::PushID(v);
     ImGui::InvisibleButton("sl", ImVec2(TRACK + KR * 2.f, KR * 2.f + 4.f));
+    const ImGuiID sliderId = ImGui::GetItemID();
     bool changed = false;
     if (ImGui::IsItemActive()) {
         float t = ImClamp((ImGui::GetIO().MousePos.x - tx0) / TRACK, 0.f, 1.f);
@@ -185,7 +197,9 @@ inline bool Slider(RowCtx& c, float* v, float mn, float mx, const char* fmt, boo
         if (nv != *v) { *v = nv; changed = true; }
     }
     ImGui::PopID();
-    float t = ImClamp((*v - mn) / (mx - mn), 0.f, 1.f), kx = tx0 + TRACK * t;
+    const float targetT = ImClamp((*v - mn) / (mx - mn), 0.f, 1.f);
+    const float t = SmoothValue(sliderId ^ 0x3D17A2B9u, targetT, 24.f);
+    const float kx = tx0 + TRACK * t;
     c.dl->AddRectFilled(ImVec2(tx0, c.cy - 2.f), ImVec2(tx1, c.cy + 2.f), IM_COL32(255, 255, 255, 40), 2.f);
     c.dl->AddRectFilled(ImVec2(tx0, c.cy - 2.f), ImVec2(kx, c.cy + 2.f), ACCENT, 2.f);
     c.dl->AddCircleFilled(ImVec2(kx, c.cy + 1.f), KR, IM_COL32(0, 0, 0, 60), 24);
@@ -359,11 +373,23 @@ inline bool Tab(const char* label, int icon, ImU32 col, bool sel, float w) {
     const float H = 30.f;
     ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + w, p0.y + H);
     bool hit = ImGui::InvisibleButton(label, ImVec2(w, H));
-    bool hov = ImGui::IsItemHovered();
+    const bool hovered = ImGui::IsItemHovered();
+    const ImGuiID itemId = ImGui::GetItemID();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    if (sel) dl->AddRectFilled(p0, p1, ACCENT, 8.f);
-    else if (hov) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 16), 8.f);
-    Icon(dl, ImVec2(p0.x + 19.f, p0.y + H * 0.5f), icon, col);
+
+    const float selectedT = Anim(itemId ^ 0x14AA31u, sel, 13.f);
+    const float hoverT = Anim(itemId ^ 0x5C39D7u, hovered && !sel, 18.f);
+    if (hoverT > 0.005f)
+        dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, static_cast<int>(24.f * hoverT)), 8.f);
+    if (selectedT > 0.005f) {
+        dl->AddRectFilled(p0, p1,
+            IM_COL32(10, 132, 255, static_cast<int>(232.f * selectedT)), 8.f);
+        dl->AddRectFilled(ImVec2(p0.x + 4.f, p0.y + 6.f),
+                          ImVec2(p0.x + 7.f, p1.y - 6.f),
+                          IM_COL32(255, 255, 255, static_cast<int>(210.f * selectedT)), 2.f);
+    }
+
+    Icon(dl, ImVec2(p0.x + 19.f, p0.y + H * 0.5f), icon, LerpCol(col, COL_TEXT, selectedT * 0.72f));
     ImVec2 ts = ImGui::CalcTextSize(label);
     dl->AddText(ImVec2(p0.x + 40.f, p0.y + (H - ts.y) * 0.5f), COL_TEXT, label);
     return hit;
@@ -385,13 +411,13 @@ inline void DrawBackground(ImDrawList* dl, ImVec2 p, ImVec2 s) {
 }
 
 // ------------------------------------------------------------ pages
-inline void AimPage(State& s) {
+inline void AimPage(State& s, float verticalOffset = 0.f) {
     static const char* hitboxes[] = { "Head", "Neck", "Chest" };
     static const char* presets[]  = { "Legit", "Semi", "Custom" };
     static const char* styles[]   = { "Corners", "Full", "Filled" };
 
     const float colw = 306.f;
-    ImGui::SetCursorPos(ImVec2(25.f, 87.f));
+    ImGui::SetCursorPos(ImVec2(25.f, 87.f + verticalOffset));
 
     // ---- aimbot
     ImGui::BeginChild("##col1", ImVec2(colw, 420.f), 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar);
@@ -443,8 +469,8 @@ inline bool MatchesSearch(const char* label, const char* query) {
 }
 
 // ------------------------------------------------------------ independent demonstration pages
-inline void SecondaryPage(State& s) {
-    ImGui::SetCursorPos(ImVec2(25.f, 98.f));
+inline void SecondaryPage(State& s, float verticalOffset = 0.f) {
+    ImGui::SetCursorPos(ImVec2(25.f, 98.f + verticalOffset));
     ImGui::BeginChild("##secondary", ImVec2(-20.f, -78.f), false);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.f, 12.f));
     if (s.tab == 1) {
@@ -511,8 +537,15 @@ inline void Style() {
 inline void Render(State& s, bool* open = nullptr) {
     const ImVec2 size(880.f, 560.f);
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImVec2(0.f, 0.f), ImGuiCond_Always);
+
+    // Ease the panel into the center after the overlay starts.
+    static float menuReveal = 0.f;
+    menuReveal = ImMin(1.f, menuReveal + io.DeltaTime * 6.f);
+    const float revealEase = menuReveal * menuReveal * (3.f - 2.f * menuReveal);
+    const ImVec2 panelPos((io.DisplaySize.x - size.x) * 0.5f,
+                          (io.DisplaySize.y - size.y) * 0.5f + (1.f - revealEase) * 18.f);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    ImGui::SetNextWindowPos(panelPos, ImGuiCond_Always);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
@@ -561,11 +594,34 @@ inline void Render(State& s, bool* open = nullptr) {
         }
 
         if (visibleTabs == 0) { ImGui::SetCursorPos(ImVec2(16.f, 68.f)); ImGui::TextDisabled("No results"); }
-        if (s.show_fps) cdl->AddCircleFilled(ImVec2(wp.x + 30.f, wp.y + actualSize.y - 26.f), 4.5f, GREEN, 16);
-        char fps[16]; snprintf(fps, sizeof fps, "%.0f FPS", io.Framerate);
-        cdl->AddText(ImVec2(wp.x + 44.f, wp.y + size.y - 34.f), DIM, fps);
+        // FPS badge is anchored to the real panel height (not the old hard-coded 560px).
+        const float badgeY = wp.y + actualSize.y - 43.f;
+        const ImVec2 badgeMin(wp.x + 14.f, badgeY);
+        const ImVec2 badgeMax(wp.x + 116.f, badgeY + 30.f);
+        cdl->AddRectFilled(badgeMin, badgeMax, IM_COL32(255, 255, 255, 18), 9.f);
+        cdl->AddRect(badgeMin, badgeMax, IM_COL32(255, 255, 255, 28), 9.f, 0, 1.f);
+        if (s.show_fps) {
+            const float pulse = 0.72f + 0.28f * sinf(static_cast<float>(io.Time) * 3.2f);
+            cdl->AddCircleFilled(ImVec2(wp.x + 29.f, wp.y + actualSize.y - 28.f),
+                                 4.5f, IM_COL32(48, 209, 88, static_cast<int>(255.f * pulse)), 20);
+            char fps[24];
+            const float measuredFps = s.render_fps > 0.f ? s.render_fps : io.Framerate;
+            snprintf(fps, sizeof fps, "%.0f FPS", measuredFps);
+            cdl->AddText(ImVec2(wp.x + 42.f, wp.y + actualSize.y - 35.f), COL_TEXT, fps);
+        }
     }
     ImGui::EndChild();
+
+    // Short, eased slide whenever the selected page changes.
+    static int previousTab = -1;
+    static float pageProgress = 1.f;
+    if (previousTab != s.tab) {
+        previousTab = s.tab;
+        pageProgress = 0.f;
+    }
+    pageProgress = ImMin(1.f, pageProgress + io.DeltaTime * 7.f);
+    const float pageEase = pageProgress * pageProgress * (3.f - 2.f * pageProgress);
+    const float pageOffset = (1.f - pageEase) * 12.f;
 
     // ---------------- content
     ImGui::SetCursorPos(ImVec2(200.f, 0));
@@ -577,10 +633,12 @@ inline void Render(State& s, bool* open = nullptr) {
         const char* subs[]   = { "Target selection and assist behavior", "Overlay and rendering options",
                                  "Player list and filters", "Miscellaneous options", "Save and load profiles" };
 
-        // fake-bold title
-        cdl->AddText(ImGui::GetFont(), 30.f, ImVec2(cp.x + 25.f, cp.y + 22.f), COL_TEXT, titles[s.tab]);
-        cdl->AddText(ImGui::GetFont(), 30.f, ImVec2(cp.x + 25.7f, cp.y + 22.f), COL_TEXT, titles[s.tab]);
-        cdl->AddText(ImGui::GetFont(), 16.f, ImVec2(cp.x + 25.f, cp.y + 56.f), DIM, subs[s.tab]);
+        // Fade the heading while the body slides into place.
+        const ImU32 titleColor = IM_COL32(245, 245, 247, static_cast<int>(255.f * pageEase));
+        const ImU32 subtitleColor = IM_COL32(235, 235, 245, static_cast<int>(150.f * pageEase));
+        cdl->AddText(ImGui::GetFont(), 30.f, ImVec2(cp.x + 25.f, cp.y + 22.f + pageOffset), titleColor, titles[s.tab]);
+        cdl->AddText(ImGui::GetFont(), 30.f, ImVec2(cp.x + 25.7f, cp.y + 22.f + pageOffset), titleColor, titles[s.tab]);
+        cdl->AddText(ImGui::GetFont(), 16.f, ImVec2(cp.x + 25.f, cp.y + 56.f + pageOffset), subtitleColor, subs[s.tab]);
 
         // window buttons
         struct WB { float x; ImU32 col; bool close; } wbs[] = {
@@ -605,8 +663,8 @@ inline void Render(State& s, bool* open = nullptr) {
         }
 
         s.tab = ImClamp(s.tab, 0, 4);
-        if (s.tab == 0) AimPage(s);
-        else SecondaryPage(s);
+        if (s.tab == 0) AimPage(s, pageOffset);
+        else SecondaryPage(s, pageOffset);
 
         // help button
         ImVec2 hc(cp.x + 25.f + 11.f, cp.y + actualSize.y - 38.f);
